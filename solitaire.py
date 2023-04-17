@@ -1,7 +1,9 @@
 import time
-
+import playsound
 import arcade
 import random
+
+from arcade import key
 
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
@@ -63,6 +65,14 @@ SINGLE_CARD_DRAW = 1
 
 SCORE = 0
 
+background_music = arcade.Sound("Resources/music/backgroundMusic.mp3")
+music_player = background_music.play(volume=0.5, loop=True)
+music_playing = True
+
+card_flip_sound = arcade.load_sound("Resources/soundfx/cardFlip.mp3")
+card_drop_sound = arcade.load_sound("Resources/soundfx/dropCard.mp3")
+sound_effects = True
+
 
 # allows each card to be identified by an integer value to be used in pile logic.
 def get_rank_number(rank):
@@ -107,10 +117,30 @@ def get_color_by_suit(suit):
 class Solitaire(arcade.Window):
 
     def __init__(self):
+
         print('__init__')
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+
+        self.mat_colors = [arcade.color.BLEU_DE_FRANCE,
+                           arcade.color.DARK_SPRING_GREEN,
+                           arcade.color.CARNELIAN]
+
+        self.mat_color_index = 0
+
+        self.placeholder_colors = [arcade.csscolor.CORNFLOWER_BLUE, arcade.csscolor.DARK_OLIVE_GREEN,
+                                   arcade.csscolor.ORANGE_RED]
+
+        self.placeholder_color_index = 0
+
+        self.placeholders = {}
+
+        self.current_placeholder_color = self.placeholder_colors[self.placeholder_color_index]
+
+        self.current_mat_color = self.mat_colors[self.mat_color_index]
+
         self.card_list = None
-        arcade.set_background_color(arcade.color.DARK_SPRING_GREEN)
+
+        arcade.set_background_color(self.current_mat_color)
 
         self.held_cards = None
 
@@ -126,17 +156,23 @@ class Solitaire(arcade.Window):
                                    (3, 2), (3, 3), (3, 4), (2, 0), (2, 1), (2, 2),
                                    (2, 3), (2, 4), (2, 5)}
 
-        # top pile indices
-        # self.top_pile_indices = [TOP_PILE_1, TOP_PILE_2, TOP_PILE_3, TOP_PILE_4]
-
-        # action stack (for undo function)
         self.action_stack = []
 
         self.last_clicked_card = None
+
         self.last_click_time = 0
 
-    def setup(self):
+        self.menu_overlay = MenuOverlay(200, 150, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+
+        self.menu_active = False
+
+        self.help_overlay = GameSummaryWindow(600, 400, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+
+        self.help_active = False
+
+    def setup(self, current_placeholder_color=None):
         print('setup')
+
         self.held_cards = []
 
         self.held_cards_original_position = []
@@ -149,22 +185,37 @@ class Solitaire(arcade.Window):
                                    (3, 2), (3, 3), (3, 4), (2, 0), (2, 1), (2, 2),
                                    (2, 3), (2, 4), (2, 5)}
 
-        for i in range(2):
-            pile = arcade.SpriteSolidColor(MAT_WIDTH, MAT_HEIGHT, arcade.csscolor.DARK_OLIVE_GREEN)
-            pile.position = (START_X + i * X_SPACING, TOP_TOP_Y)
-            self.pile_mat_list.append(pile)
+        if current_placeholder_color is not None:
+            placeholder_color = current_placeholder_color
+        else:
+            placeholder_color = self.current_placeholder_color
 
+        for i in range(2):
+            if i == 1 and SINGLE_CARD_DRAW == 3:  # Adjust the width of the right placeholder if dealing three cards
+                pile = arcade.SpriteSolidColor(MAT_WIDTH + 40, MAT_HEIGHT,
+                                               placeholder_color)
+                pile.position = (START_X + i * X_SPACING + 20, TOP_TOP_Y)
+            else:
+                pile = arcade.SpriteSolidColor(MAT_WIDTH, MAT_HEIGHT,
+                                               placeholder_color)
+                pile.position = (START_X + i * X_SPACING, TOP_TOP_Y)
+
+            self.pile_mat_list.append(pile)
+        # Create placeholders for tableau piles
         for i in range(7):
-            pile = arcade.SpriteSolidColor(MAT_WIDTH, MAT_HEIGHT, arcade.csscolor.DARK_OLIVE_GREEN)
+            pile = arcade.SpriteSolidColor(MAT_WIDTH, MAT_HEIGHT, placeholder_color)
             pile.position = (SCREEN_WIDTH - CARD_WIDTH / 2 - CARD_WIDTH * HORIZONTAL_MARGIN_PERCENT - i * X_SPACING,
                              MIDDLE_Y)
             self.pile_mat_list.append(pile)
+            self.placeholders[i + 1] = pile  # Store the pile sprite in the placeholders dictionary
 
+        # Create placeholders for foundation piles
         for i in range(4):
-            pile = arcade.SpriteSolidColor(MAT_WIDTH, MAT_HEIGHT, arcade.csscolor.DARK_OLIVE_GREEN)
+            pile = arcade.SpriteSolidColor(MAT_WIDTH, MAT_HEIGHT, placeholder_color)
             pile.position = (SCREEN_WIDTH - CARD_WIDTH / 2 - CARD_WIDTH * HORIZONTAL_MARGIN_PERCENT - i * X_SPACING,
                              TOP_TOP_Y)
             self.pile_mat_list.append(pile)
+            self.placeholders[i + 9] = pile  # Store the pile sprite in the placeholders dictionary
 
         self.card_list = arcade.SpriteList()
 
@@ -202,11 +253,96 @@ class Solitaire(arcade.Window):
         self.draw_game_menu()
 
         self.pile_mat_list.draw()
+        for pile in self.piles:
+            for card in pile:
+                card.draw()
+
+        draw_pile = self.piles[BOTTOM_FACE_UP_PILE]
+        if SINGLE_CARD_DRAW == 3 and len(draw_pile) >= 3:
+            for i, card in enumerate(draw_pile[-3:]):
+                if card not in self.held_cards:
+                    card.position = (START_X + CARD_WIDTH + 32 + i * 24, TOP_CARD_Y)
+                card.draw()
+        else:
+            pass
+
+        if SINGLE_CARD_DRAW == 3 and len(draw_pile) >= 3:
+            # Update the position of the cards not visible in the draw pile
+            for card in draw_pile[:-3]:
+                card.position = (START_X + CARD_WIDTH + 32, TOP_CARD_Y)
+        else:
+            pass
+
+        # Draw borders for each placeholder
+        border_width = 2
+        for i, pile in enumerate(self.pile_mat_list):
+            draw_border = True
+
+            if i == BOTTOM_FACE_UP_PILE and SINGLE_CARD_DRAW == 3:
+                arcade.draw_rectangle_outline(
+                    pile.center_x,
+                    pile.center_y,
+                    MAT_WIDTH + 34,
+                    MAT_HEIGHT - border_width,
+                    arcade.color.WHITE,
+                    border_width
+                )
+            else:
+                arcade.draw_rectangle_outline(
+                    pile.center_x,
+                    pile.center_y,
+                    MAT_WIDTH - border_width,
+                    MAT_HEIGHT - border_width,
+                    arcade.color.WHITE,
+                    border_width
+                )
 
         self.card_list.draw()
 
+        self.menu_overlay.draw()
+
+        self.help_overlay.draw()
+
+    def change_mat_color(self):
+        try:
+            self.mat_color_index = (self.mat_color_index + 1) % len(self.mat_colors)
+            current_mat_color = self.mat_colors[self.mat_color_index]
+
+            # Update background color
+            arcade.set_background_color(current_mat_color)
+
+            # Update mat colors
+            for mat in self.pile_mat_list:
+                mat.color = current_mat_color
+        except Exception as e:
+            print(f"An error occurred while changing mat colors: {e}")
+
+    def change_placeholder_color(self):
+        # Change the placeholder colors
+        self.placeholder_color_index = (self.placeholder_color_index + 1) % len(self.placeholder_colors)
+        current_placeholder_color = self.placeholder_colors[self.placeholder_color_index]
+
+        # Update placeholder colors for draw pile placeholders
+        for i in range(2):
+            if i == 1 and SINGLE_CARD_DRAW == 3:  # Adjust the width of the right placeholder if dealing three cards
+                self.pile_mat_list[i].color = current_placeholder_color
+            else:
+                self.pile_mat_list[i].color = current_placeholder_color
+
+        # Update placeholder colors for tableau piles
+        for pile_index in range(1, 8):
+            if pile_index in self.placeholders:
+                self.placeholders[pile_index].color = current_placeholder_color
+
+        # Update placeholder colors for foundation piles
+        for pile_index in range(TOP_PILE_1, TOP_PILE_4 + 1):
+            if len(self.piles[pile_index]) == 0:
+                self.placeholders[pile_index].color = current_placeholder_color
+        self.draw_game_menu()
+
     def auto_flip_card(self):
         global SCORE
+
         for i in range(PLAY_PILE_1, PLAY_PILE_7 + 1):
             if len(self.piles[i]) > 0:
                 top_card = self.piles[i][-1]
@@ -218,8 +354,8 @@ class Solitaire(arcade.Window):
                     if pile_idx in self.restricted_indices:
                         self.restricted_indices.remove(pile_idx)
 
-    # not working
     def auto_stack_card(self, card):
+        global sound_effects
         if card is None:
             return
 
@@ -233,10 +369,18 @@ class Solitaire(arcade.Window):
                 top_pile = self.piles[top_pile_index]
                 if len(top_pile) == 0 and card.rank == 'A':
                     self.move_card_to_new_pile(card, top_pile_index)
+                    if sound_effects:
+                        card_drop_sound.play()
+                    elif not sound_effects:
+                        print("Sound effects are off right now.")
                     break
                 elif len(top_pile) > 0 and top_pile[-1].suit == card.suit and get_rank_number(
                         top_pile[-1].rank) + 1 == get_rank_number(card.rank):
                     self.move_card_to_new_pile(card, top_pile_index)
+                    if sound_effects:
+                        card_drop_sound.play()
+                    elif not sound_effects:
+                        print("Sound effects are off right now.")
                     break
 
     def get_valid_top_pile_for_card(self, card):
@@ -268,9 +412,37 @@ class Solitaire(arcade.Window):
             #     self.restricted_indices.remove((original_pile_index, original_card_index - 1))
 
     def on_mouse_press(self, x, y, button, key_modifiers):
-        global SCORE
+        global SCORE, primary_card, sound_effects
         print('action: mouse "pressed"')
         self.auto_flip_card()
+
+        # If the menu is open, only the menu button and the menu overlay are targetable
+        if self.menu_overlay.visible:
+            if button == arcade.MOUSE_BUTTON_LEFT:
+                if SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
+                        SCREEN_WIDTH * 0.097 / 2 and \
+                        SCREEN_HEIGHT * 0.5 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.5 + SCREEN_HEIGHT * 0.05 / 2:
+                    # Draw menu overlay
+                    print('draw_menu_overlay')
+                    self.menu_overlay.toggle()
+                    self.menu_active = not self.menu_active
+                elif self.menu_overlay.contains_point(x, y):
+                    print('menu_overlay clicked')
+                    self.menu_overlay.handle_click(x, y)
+            return
+
+        # If the help overlay is open, only the help button is targetable
+        if self.help_overlay.visible:
+            if button == arcade.MOUSE_BUTTON_LEFT:
+                if (
+                        SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + SCREEN_WIDTH * 0.097 / 2 and
+                        SCREEN_HEIGHT * 0.4 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.4 + SCREEN_HEIGHT * 0.05 / 2):
+                    # Help button clicked
+                    print('help overlay')
+                    self.help_overlay.toggle()
+                    self.help_active = not self.help_active
+            return
+
         if button == arcade.MOUSE_BUTTON_LEFT:
             if SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
                     SCREEN_WIDTH * 0.097 / 2 and \
@@ -281,24 +453,41 @@ class Solitaire(arcade.Window):
                 self.change_card_back()
             elif SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
                     SCREEN_WIDTH * 0.097 / 2 and \
-                    SCREEN_HEIGHT * 0.5 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.5 + \
+                    SCREEN_HEIGHT * 0.7 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.7 + \
                     SCREEN_HEIGHT * 0.05 / 2:
                 # Deal Three button clicked
                 print('deal three')
                 self.deal_three()
             elif SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
                     SCREEN_WIDTH * 0.097 / 2 and \
-                    SCREEN_HEIGHT * 0.4 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.4 + SCREEN_HEIGHT * 0.05 / 2:
+                    SCREEN_HEIGHT * 0.3 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.3 + SCREEN_HEIGHT * 0.05 / 2:
                 # Reset button clicked
                 print('reset')
                 self.reset()
 
             elif SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
                     SCREEN_WIDTH * 0.097 / 2 and \
-                    SCREEN_HEIGHT * 0.3 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.3 + SCREEN_HEIGHT * 0.05 / 2:
+                    SCREEN_HEIGHT * 0.2 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.2 + SCREEN_HEIGHT * 0.05 / 2:
                 # Quit button clicked
                 print('quit')
                 self.quit()
+
+            elif SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
+                    SCREEN_WIDTH * 0.097 / 2 and \
+                    SCREEN_HEIGHT * 0.5 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.5 + SCREEN_HEIGHT * 0.05 / 2:
+                # Draw menu overlay
+                print('draw_menu_overlay')
+                self.menu_overlay.toggle()
+                self.menu_active = not self.menu_active
+
+            elif SCREEN_WIDTH * 0.1 - SCREEN_WIDTH * 0.097 / 2 < x < SCREEN_WIDTH * 0.1 + \
+                    SCREEN_WIDTH * 0.097 / 2 and \
+                    SCREEN_HEIGHT * 0.4 - SCREEN_HEIGHT * 0.05 / 2 < y < SCREEN_HEIGHT * 0.4 + \
+                    SCREEN_HEIGHT * 0.05 / 2:
+                # Change Mat Color button clicked
+                print('help overlay')
+                self.help_overlay.toggle()
+                self.help_active = not self.help_active
 
         cards = arcade.get_sprites_at_point((x, y), self.card_list)
 
@@ -307,12 +496,20 @@ class Solitaire(arcade.Window):
             primary_card = cards[-1]
             assert isinstance(primary_card, Card)
 
+            if primary_card in self.piles[BOTTOM_FACE_UP_PILE] and primary_card != self.piles[BOTTOM_FACE_UP_PILE][-1]:
+                return
+
             current_click_time = time.time()
             if self.last_clicked_card == primary_card and current_click_time - self.last_click_time < 0.5:
                 # Double-click detected+scoring
                 valid_top_pile, is_play_pile = self.get_valid_top_pile_for_card(primary_card)
                 if valid_top_pile is not None:
                     self.move_card_to_top_pile(primary_card, valid_top_pile)
+
+                    if sound_effects:
+                        card_drop_sound.play()
+                    elif not sound_effects:
+                        print("Sound effects are off right now.")
                     if is_play_pile:
                         SCORE += 10
                     else:
@@ -341,10 +538,19 @@ class Solitaire(arcade.Window):
                     card.face_up()
                     card.position = self.pile_mat_list[BOTTOM_FACE_UP_PILE].position
 
+                    # Apply horizontal offset if SINGLE_CARD_DRAW is set to 3
+                    if SINGLE_CARD_DRAW == 3:
+                        card.position = (card.position[0] + 20 * i, card.position[1])
+
                     self.piles[BOTTOM_FACE_DOWN_PILE].remove(card)
                     self.piles[BOTTOM_FACE_UP_PILE].append(card)
 
                     self.pull_to_top(card)
+
+                if sound_effects:
+                    card_flip_sound.play()
+                elif not sound_effects:
+                    print("Sound effects are off right now.")
 
             if TOP_PILE_1 <= pile_index <= TOP_PILE_4:
                 return
@@ -455,6 +661,10 @@ class Solitaire(arcade.Window):
             print(uble)
             pass
 
+        except Exception as e:
+            print("An error occurred in the on_mouse_press method:")
+            print(e)
+
     def on_mouse_release(self, x: float, y: float, button: int, modifiers: int):
         print('action: mouse "released"')
         global SCORE
@@ -562,8 +772,16 @@ class Solitaire(arcade.Window):
                 break
 
     def move_card_to_new_pile(self, card, pile_index):
+
         self.remove_card_from_pile(card)
         self.piles[pile_index].append(card)
+
+        print('11111111111111111111111111111111111')
+        global sound_effects
+        if sound_effects:
+            card_drop_sound.play()
+        elif not sound_effects:
+            print("Sound effects are off right now.")
 
     def pull_to_top(self, card: arcade.Sprite):
         self.card_list.remove(card)
@@ -577,42 +795,69 @@ class Solitaire(arcade.Window):
             arcade.color.WHITE, font_size=12, anchor_x="center", anchor_y="bottom"
         )
 
+        # Display game company and version information
+        game_company = "The <<GAME>> Company"
+        game_version = "Version 4.0.0"
+        info_text = f"{game_company}, {game_version}"
+        arcade.draw_text(
+            info_text,
+            SCREEN_WIDTH - 10, SCREEN_HEIGHT * 0.02,
+            arcade.color.WHITE, font_size=10,
+            anchor_x="right", anchor_y="bottom"
+        )
+
+        border_color = arcade.color.WHITE
+        border_thickness = 2
         # Draw "Quit" button
         arcade.draw_rectangle_filled(
-            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.3,
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.2,
             SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
-            arcade.color.DARK_OLIVE_GREEN
+            self.placeholder_colors[self.placeholder_color_index]
+        )
+        arcade.draw_rectangle_outline(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.2,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            border_color, border_thickness
         )
         arcade.draw_text(
-            "QUIT", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.3,
+            "QUIT", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.2,
             arcade.color.WHITE, font_size=9, anchor_x="center", anchor_y="center"
         )
 
-        # Draw the "Reset" button
         arcade.draw_rectangle_filled(
-            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.4,
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.3,
             SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
-            arcade.color.DARK_OLIVE_GREEN
+            self.placeholder_colors[self.placeholder_color_index]
+        )
+        arcade.draw_rectangle_outline(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.3,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            border_color, border_thickness
         )
         arcade.draw_text(
-            "RESET", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.4,
+            "RESET", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.3,
             arcade.color.WHITE, font_size=9, anchor_x="center", anchor_y="center"
         )
 
         if SINGLE_CARD_DRAW == 3:
             arcade.draw_rectangle_filled(
-                SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.5,
+                SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.7,
                 SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
                 arcade.color.FIREBRICK
             )
         else:
             arcade.draw_rectangle_filled(
-                SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.5,
+                SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.7,
                 SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
-                arcade.color.DARK_OLIVE_GREEN
+                self.placeholder_colors[self.placeholder_color_index]
             )
+        arcade.draw_rectangle_outline(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.7,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            border_color, border_thickness
+        )
         arcade.draw_text(
-            "DEAL THREE", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.5,
+            "DEAL THREE", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.7,
             arcade.color.WHITE, font_size=9, anchor_x="center", anchor_y="center"
         )
 
@@ -620,10 +865,48 @@ class Solitaire(arcade.Window):
         arcade.draw_rectangle_filled(
             SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.6,
             SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
-            arcade.color.DARK_OLIVE_GREEN
+            self.placeholder_colors[self.placeholder_color_index]
+        )
+        arcade.draw_rectangle_outline(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.6,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            border_color, border_thickness
         )
         arcade.draw_text(
             "NEW CARD BACK", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.6,
+            arcade.color.WHITE, font_size=9, anchor_x="center", anchor_y="center"
+        )
+        menu_button_color = arcade.color.FIREBRICK if self.menu_active else \
+            self.placeholder_colors[self.placeholder_color_index]
+        arcade.draw_rectangle_filled(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.5,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            menu_button_color
+        )
+        arcade.draw_rectangle_outline(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.5,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            border_color, border_thickness
+        )
+        arcade.draw_text(
+            "SETTINGS", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.5,
+            arcade.color.WHITE, font_size=9, anchor_x="center", anchor_y="center"
+        )
+
+        help_button_color = arcade.color.FIREBRICK if self.help_active else \
+            self.placeholder_colors[self.placeholder_color_index]
+        arcade.draw_rectangle_filled(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.4,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            help_button_color
+        )
+        arcade.draw_rectangle_outline(
+            SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.4,
+            SCREEN_WIDTH * 0.097, SCREEN_HEIGHT * 0.05,
+            border_color, border_thickness
+        )
+        arcade.draw_text(
+            "HELP", SCREEN_WIDTH * 0.1, SCREEN_HEIGHT * 0.4,
             arcade.color.WHITE, font_size=9, anchor_x="center", anchor_y="center"
         )
 
@@ -683,6 +966,151 @@ class Solitaire(arcade.Window):
             for card in self.card_list:
                 card.change_x = 0
                 card.change_y = 0
+
+
+class MenuOverlay:
+    def __init__(self, width, height, x, y):
+        self.width = width
+        self.height = height
+        self.x = x
+        self.y = y
+        self.visible = False
+        self.music_on = True
+        self.sound_fx_on = True
+
+    def draw(self):
+        if self.visible:
+            arcade.draw_rectangle_filled(self.x, self.y, self.width, self.height, arcade.color.WHITE)
+            arcade.draw_rectangle_outline(self.x, self.y, self.width, self.height, arcade.color.BLACK, 2)
+            arcade.draw_text("SETTINGS", self.x, self.y + 35, arcade.color.BLACK, font_size=16, anchor_x="center")
+
+            # Draw "Toggle Music" button
+            # Draw "Toggle Sound FX" button
+            arcade.draw_rectangle_outline(self.x, self.y,
+                                          150, 30, arcade.color.BLACK, 2)
+            arcade.draw_rectangle_filled(
+                self.x, self.y,
+                150, 30,
+                arcade.color.DARK_OLIVE_GREEN if self.music_on else arcade.color.FIREBRICK
+            )
+            arcade.draw_text(
+                "TOGGLE MUSIC", self.x, self.y,
+                arcade.color.WHITE, font_size=10, anchor_x="center", anchor_y="center"
+            )
+
+            # Draw "Toggle Sound FX" button
+            arcade.draw_rectangle_outline(self.x, self.y - 40,
+                                          150, 30, arcade.color.BLACK, 2)
+            arcade.draw_rectangle_filled(
+                self.x, self.y - 40,
+                150, 30,
+                arcade.color.DARK_OLIVE_GREEN if self.sound_fx_on else arcade.color.FIREBRICK
+            )
+            arcade.draw_text(
+                "TOGGLE SOUND FX", self.x, self.y - 40,
+                arcade.color.WHITE, font_size=10, anchor_x="center", anchor_y="center"
+            )
+
+    def toggle(self):
+        self.visible = not self.visible
+
+    def handle_click(self, x, y):
+        # Check if "Toggle Music" button is clicked
+        if self.x - 75 <= x <= self.x + 75 and self.y - 15 <= y <= self.y + 15:
+            self.music_on = not self.music_on
+            print("Toggle Music")
+            global music_playing
+            global background_music
+            global music_player
+
+            if music_player.playing:
+                music_player.pause()
+                music_playing = False
+
+            elif not music_player.playing:
+                music_player.play()
+                music_playing = True
+                print("ELSE 911")
+
+        # Check if "Toggle Sound FX" button is clicked
+        elif self.x - 75 <= x <= self.x + 75 and self.y - 55 <= y <= self.y - 25:
+            self.sound_fx_on = not self.sound_fx_on
+            print("Toggle Sound FX")
+
+            global sound_effects
+            if sound_effects:
+                sound_effects = False
+            elif not sound_effects:
+                sound_effects = True
+
+    def contains_point(self, x, y):
+        left = self.x - self.width / 2
+        right = self.x + self.width / 2
+        bottom = self.y - self.height / 2
+        top = self.y + self.height / 2
+        return left <= x <= right and bottom <= y <= top
+
+
+class GameSummaryWindow:
+    def __init__(self, width, height, x, y):
+        self.width = width
+        self.height = height
+        self.x = x
+        self.y = y
+        self.visible = False
+
+    def draw(self):
+        if self.visible:
+            arcade.draw_rectangle_filled(self.x, self.y, self.width, self.height, arcade.color.WHITE)
+            arcade.draw_rectangle_outline(self.x, self.y, self.width, self.height, arcade.color.BLACK, 2)
+            arcade.draw_text("SOLITAIRE HELP", self.x, self.y + self.height / 2 - 30, arcade.color.BLACK, font_size=16,
+                             anchor_x="center")
+
+            # Add your game summary information here
+            # Game summary information
+            summary_text = [
+                "",
+                "Solitaire Rules:",
+                "- The goal is to move all cards to the foundation piles.",
+                "- Foundation piles are built up by suit from Ace to King.",
+                "- The tableau piles are built down by alternating colors.",
+                "- Only a King can be placed on an empty tableau pile.",
+                "- You can draw cards from the stock pile to help.",
+                "",
+                "Scoring:",
+                "- Moving a card from the stock to the tableau: 5 points.",
+                "- Moving a card from the stock to the foundation: 10 points.",
+                "- Moving a card from the tableau to the foundation: 10 points.",
+                "- Turning over a card in the tableau: 5 points.",
+                "",
+                "For more information, please refer to the official rulebook which can be found here:",
+                "",
+                "https://bicyclecards.com/how-to-play/solitaire"
+            ]
+
+            line_height = 16
+            horizontal_padding = (self.width - 20) / 2  # Adjust the padding to match the desired horizontal position
+            for i, line in enumerate(summary_text):
+                arcade.draw_text(
+                    line,
+                    self.x - horizontal_padding, self.y + self.height / 2 - 60 - i * line_height,
+                    arcade.color.BLACK, font_size=10, anchor_x="left", anchor_y="top", align="left"
+                )
+
+    def toggle(self):
+        self.visible = not self.visible
+
+    def handle_click(self, x, y):
+        # Check if "Close" button is clicked
+        if self.x - 50 <= x <= self.x + 50 and self.y - self.height / 2 + 15 <= y <= self.y - self.height / 2 + 45:
+            self.toggle()
+
+    def contains_point(self, x, y):
+        left = self.x - self.width / 2
+        right = self.x + self.width / 2
+        bottom = self.y - self.height / 2
+        top = self.y + self.height / 2
+        return left <= x <= right and bottom <= y <= top
 
 
 class Card(arcade.Sprite):
